@@ -15,7 +15,6 @@ OpenCode supports both **JSON** and **JSONC** (JSON with Comments) formats.
 {
   "$schema": "https://opencode.ai/config.json",
   "model": "anthropic/claude-sonnet-5-5",
-  "autoupdate": true,
   "server": {
     "port": 4096,
   },
@@ -34,8 +33,6 @@ Configuration files are **merged together**, not replaced.
 :::
 
 Configuration files are merged together, not replaced. Settings from the following config locations are combined. Later configs override earlier ones only for conflicting keys. Non-conflicting settings from all configs are preserved.
-
-For example, if your global config sets `autoupdate: true` and your project config sets `model: "anthropic/claude-sonnet-5-5"`, the final configuration will include both settings.
 
 ---
 
@@ -619,23 +616,6 @@ For large repositories or projects with many submodules, the snapshot system can
 ```
 
 Note that disabling snapshots means changes made by the agent cannot be rolled back through the UI.
-
----
-
-### Autoupdate
-
-OpenCode checks for new versions and shows a notice when one is available. Updates are never installed automatically. Run [`/update`](/docs/tui#update) in the TUI or [`opencode upgrade`](/docs/cli#upgrade) to install one.
-
-You can turn off update checks and notices with the `autoupdate` option.
-
-```json title="opencode.json"
-{
-  "$schema": "https://opencode.ai/config.json",
-  "autoupdate": false
-}
-```
-
-Setting `autoupdate` to `true` or `"notify"` keeps the default behavior: you're notified, but nothing is installed until you choose to update.
 
 ---
 

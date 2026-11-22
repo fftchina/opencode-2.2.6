@@ -4,11 +4,10 @@ import { EffectFlock } from "@opencode/util/effect-flock"
 import { OPENCODE_ARTIFACT, OPENCODE_CHANNEL, OPENCODE_VERSION } from "../version"
 import { Context, Duration, Effect, FileSystem, Layer, Option, Schema } from "effect"
 import { ChildProcess } from "effect/process"
-import { parse, type ParseError } from "jsonc-parser"
 import path from "node:path"
 import { stripVTControlCharacters } from "node:util"
 import { RetainedImage } from "./retained-image"
-import { parseReleaseVersion, type Policy } from "./updater-action"
+import { parseReleaseVersion } from "./updater-action"
 import { errorMessage } from "../util/error"
 
 export const methods = ["curl", "npm", "pnpm", "bun", "yarn", "vp", "brew", "winget"] as const
@@ -113,23 +112,6 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/cli/Updater") {}
-
-export function decodePolicy(text: string): Policy | undefined {
-  // The CLI only projects this host-level preference instead of initializing
-  // the location-scoped server configuration graph.
-  const errors: ParseError[] = []
-  const input: unknown = parse(text, errors, { allowTrailingComma: true })
-  if (errors.length || typeof input !== "object" || input === null) return
-  if ("update" in input) {
-    const value = input.update
-    if (value === "disable" || value === "notify" || value === "auto") return value
-    return
-  }
-  if (!("autoupdate" in input)) return
-  if (input.autoupdate === false) return "disable"
-  if (input.autoupdate === "notify") return "notify"
-  if (input.autoupdate === true) return "auto"
-}
 
 const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -521,4 +503,3 @@ const make = Effect.gen(function* () {
 export const layer = Layer.effect(Service, make)
 
 export * as Updater from "./updater"
-export { action, type Action, type Policy } from "./updater-action"

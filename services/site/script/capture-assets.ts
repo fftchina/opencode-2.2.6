@@ -255,7 +255,6 @@ function isolatedEnv(home: string) {
     PS1: "$ ",
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
-    OPENCODE_DISABLE_AUTOUPDATE: "1",
     BASH_SILENCE_DEPRECATION_WARNING: "1",
     TZ: "UTC",
     LANG: "en_US.UTF-8",
