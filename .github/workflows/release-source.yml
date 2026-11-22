@@ -1,0 +1,106 @@
+name: source-release
+
+# Lightweight release pipeline for this source snapshot fork. The upstream
+# release.yml is bound to anomalyco/opencode and needs signing keys, R2,
+# npm/Homebrew/AUR credentials, so it cannot run here. This workflow only
+# needs the repository's own GITHUB_TOKEN.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, e.g. v2.2.6"
+        required: true
+        type: string
+      draft:
+        description: "Create as a draft release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve tag
+        id: meta
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$REF_NAME"
+          fi
+          case "$tag" in
+            v*) ;;
+            *) echo "::error::tag must start with v, got: $tag"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "ref=refs/tags/$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.meta.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Build source archives
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          prefix="opencode-$VERSION"
+          git archive --format=tar.gz --prefix="$prefix/" -o "dist/$prefix-source.tar.gz" HEAD
+          git archive --format=zip    --prefix="$prefix/" -o "dist/$prefix-source.zip"    HEAD
+          (cd dist && sha256sum "$prefix-source.tar.gz" "$prefix-source.zip" > SHA256SUMS)
+          ls -lh dist
+
+      - name: Extract changelog notes
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          awk -v marker="## v$VERSION" '
+            index($0, marker) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then rm -f release-notes.md; fi
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          DRAFT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+          assets=(dist/*)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; replacing assets."
+            gh release upload "$TAG" "${assets[@]}" --clobber
+            exit 0
+          fi
+          args=(--verify-tag --title "opencode $TAG")
+          if [ -s release-notes.md ]; then
+            args+=(--notes-file release-notes.md)
+          else
+            args+=(--generate-notes)
+          fi
+          if [ "$DRAFT" = "true" ]; then
+            args+=(--draft)
+          fi
+          gh release create "$TAG" "${assets[@]}" "${args[@]}"
