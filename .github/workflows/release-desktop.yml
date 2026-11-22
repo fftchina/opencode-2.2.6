@@ -12,10 +12,6 @@ name: desktop-installers
 
 on:
   push:
-    branches: [main]
-    paths:
-      - ".github/workflows/release-desktop.yml"
-      - "packages/desktop/electron-builder.config.ts"
     tags:
       - "v*"
   workflow_dispatch:
@@ -117,6 +113,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # source-release creates the release and its changelog notes first;
+          # wait for it instead of racing to create a bare release.
+          for attempt in $(seq 1 30); do
+            gh release view "$TAG" >/dev/null 2>&1 && break
+            echo "Waiting for release $TAG ($attempt/30)..."
+            sleep 10
+          done
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --title "opencode $TAG" --generate-notes --verify-tag
           fi
@@ -176,6 +179,13 @@ jobs:
         run: |
           set -euo pipefail
           (cd dist/assets && sha256sum *.exe > SHA256SUMS-windows)
+          # source-release creates the release and its changelog notes first;
+          # wait for it instead of racing to create a bare release.
+          for attempt in $(seq 1 30); do
+            gh release view "$TAG" >/dev/null 2>&1 && break
+            echo "Waiting for release $TAG ($attempt/30)..."
+            sleep 10
+          done
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --title "opencode $TAG" --generate-notes --verify-tag
           fi
