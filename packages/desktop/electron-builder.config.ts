@@ -203,7 +203,9 @@ const getBase = (appId: string): Configuration => {
           StartupWMClass: appId,
         },
       },
-      target: ["AppImage", "deb", "rpm"],
+      // This fork only ships the .deb installer; AppImage and rpm need extra
+      // host tooling (appimagetool / rpmbuild) and are not built in CI.
+      target: ["deb"],
     },
   }
 }

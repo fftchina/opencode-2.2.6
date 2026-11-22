@@ -1,0 +1,182 @@
+name: desktop-installers
+
+# Builds the Electron desktop installers for this fork and attaches them to
+# the matching GitHub release. Upstream release.yml is tied to
+# anomalyco/opencode and needs signing keys / R2 / npm credentials, so this
+# workflow runs the repository's own build scripts with only GITHUB_TOKEN.
+#
+# The bundled CLI binary is fetched from npm at the same version as this source
+# tree instead of cross-compiling all 12 CLI targets locally. The desktop GUI
+# itself is built from this fork's sources (including the removed automatic
+# update checks).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release-desktop.yml"
+      - "packages/desktop/electron-builder.config.ts"
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach assets to (default: v<package version>)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  OPENCODE_CHANNEL: prod
+
+jobs:
+  meta:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release tag and version
+        id: resolve
+        env:
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          if [[ "$REF" == refs/tags/* ]]; then
+            tag="$REF_NAME"
+          elif [ -n "${INPUT_TAG:-}" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="v$version"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag (source version $version)"
+
+  linux-deb:
+    needs: meta
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Bun and install dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: Stage bundled CLI (linux-x64)
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          bun install --no-save --cwd "$tmp" "@opencode/cli-linux-x64-baseline@$VERSION" --os=linux --cpu=x64
+          pkg="$tmp/node_modules/@opencode/cli-linux-x64-baseline"
+          dest="packages/cli/dist/cli-linux-x64-baseline"
+          mkdir -p "$dest/bin"
+          cp "$pkg/bin/opencode" "$dest/bin/opencode"
+          cp "$pkg/package.json" "$dest/package.json"
+          ls -lh "$dest/bin/opencode"
+
+      - name: Build desktop app
+        working-directory: packages/desktop
+        env:
+          OPENCODE_TARGET: linux-x64
+          NODE_OPTIONS: --max-old-space-size=4096
+        shell: bash
+        run: bun run build
+
+      - name: Pack .deb
+        working-directory: packages/desktop
+        env:
+          OPENCODE_TARGET: linux-x64
+        shell: bash
+        run: bun run pack
+
+      - name: Collect assets and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/assets
+          cp dist/desktop/*.deb dist/assets/
+          (cd dist/assets && sha256sum *.deb > SHA256SUMS-linux)
+          ls -lh dist/assets
+
+      - name: Attach assets to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "opencode $TAG" --generate-notes --verify-tag
+          fi
+          gh release upload "$TAG" dist/assets/* --clobber
+
+  windows-exe:
+    needs: meta
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Bun and install dependencies
+        uses: ./.github/actions/setup-bun
+
+      - name: Stage bundled CLI (windows-x64)
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+          bun install --no-save --cwd "$tmp" "@opencode/cli-windows-x64-baseline@$VERSION" --os=win32 --cpu=x64
+          pkg="$tmp/node_modules/@opencode/cli-windows-x64-baseline"
+          dest="packages/cli/dist/cli-windows-x64-baseline"
+          mkdir -p "$dest/bin"
+          cp "$pkg/bin/opencode.exe" "$dest/bin/opencode.exe"
+          cp "$pkg/package.json" "$dest/package.json"
+          ls -lh "$dest/bin/opencode.exe"
+
+      - name: Build desktop app
+        working-directory: packages/desktop
+        env:
+          OPENCODE_TARGET: windows-x64
+          NODE_OPTIONS: --max-old-space-size=4096
+        shell: bash
+        run: bun run build
+
+      - name: Pack NSIS installer
+        working-directory: packages/desktop
+        env:
+          OPENCODE_TARGET: windows-x64
+        shell: bash
+        run: |
+          set -euo pipefail
+          bunx electron-builder --win --x64 --publish never --config electron-builder.config.ts
+          mkdir -p ../../dist/assets
+          cp dist/*.exe ../../dist/assets/
+          ls -lh ../../dist/assets
+
+      - name: Checksum and attach assets to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist/assets && sha256sum *.exe > SHA256SUMS-windows)
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "opencode $TAG" --generate-notes --verify-tag
+          fi
+          gh release upload "$TAG" dist/assets/* --clobber
