@@ -1,14 +1,15 @@
 name: desktop-installers
 
-# Builds the Electron desktop installers for this fork and attaches them to
-# the matching GitHub release. Upstream release.yml is tied to
-# anomalyco/opencode and needs signing keys / R2 / npm credentials, so this
-# workflow runs the repository's own build scripts with only GITHUB_TOKEN.
+# Builds the CLI and the Electron desktop installers entirely from this fork's
+# sources, then attaches them to the matching GitHub release. Upstream
+# release.yml is tied to anomalyco/opencode and needs signing keys, R2 and
+# npm credentials, so this workflow runs the repository's own build scripts
+# with only GITHUB_TOKEN.
 #
-# The bundled CLI binary is fetched from npm at the same version as this source
-# tree instead of cross-compiling all 12 CLI targets locally. The desktop GUI
-# itself is built from this fork's sources (including the removed automatic
-# update checks).
+# Each job compiles the CLI for its own platform into packages/cli/dist. The
+# desktop build script (packages/desktop/script/build.ts) detects that output
+# and embeds the locally built binary instead of downloading the published npm
+# CLI package. The same binary is also published as a standalone CLI asset.
 
 on:
   push:
@@ -59,7 +60,9 @@ jobs:
   linux-deb:
     needs: meta
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
+    env:
+      OPENCODE_VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,20 +70,41 @@ jobs:
       - name: Set up Bun and install dependencies
         uses: ./.github/actions/setup-bun
 
-      - name: Stage bundled CLI (linux-x64)
+      - name: Build CLI from source (linux-x64-baseline)
+        working-directory: packages/cli
+        env:
+          OPENCODE_TARGET: linux-x64-baseline
+          NODE_OPTIONS: --max-old-space-size=4096
+        shell: bash
+        run: bun ./script/build.ts --skip-install
+
+      - name: Package standalone CLI (linux)
         env:
           VERSION: ${{ needs.meta.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-          tmp=$(mktemp -d)
-          bun install --no-save --cwd "$tmp" "@opencode/cli-linux-x64-baseline@$VERSION" --os=linux --cpu=x64
-          pkg="$tmp/node_modules/@opencode/cli-linux-x64-baseline"
-          dest="packages/cli/dist/cli-linux-x64-baseline"
-          mkdir -p "$dest/bin"
-          cp "$pkg/bin/opencode" "$dest/bin/opencode"
-          cp "$pkg/package.json" "$dest/package.json"
-          ls -lh "$dest/bin/opencode"
+          cli="packages/cli/dist/cli-linux-x64-baseline/bin/opencode"
+          test -s "$cli" || { echo "::error::Compiled CLI missing: $cli"; exit 1; }
+          mkdir -p dist/assets
+          timeout 60 "$cli" --version || echo "::warning::CLI --version smoke check did not complete"
+          tar -I 'gzip -1' -cf dist/assets/opencode-cli-linux-x64.tar.gz -C "$(dirname "$cli")" opencode
+          pkg=$(mktemp -d)
+          mkdir -p "$pkg/DEBIAN" "$pkg/usr/bin"
+          cp "$cli" "$pkg/usr/bin/opencode"
+          chmod 755 "$pkg/usr/bin/opencode"
+          printf '%s\n' \
+            "Package: opencode" \
+            "Version: $VERSION" \
+            "Section: utils" \
+            "Priority: optional" \
+            "Architecture: amd64" \
+            "Maintainer: fftchina" \
+            "Description: opencode CLI built from source (automatic updates removed)" \
+            > "$pkg/DEBIAN/control"
+          dpkg-deb -Zgzip --build --root-owner-group "$pkg" dist/assets/opencode-cli-linux-amd64.deb
+          rm -rf "$pkg"
+          ls -lh dist/assets
 
       - name: Build desktop app
         working-directory: packages/desktop
@@ -97,13 +121,19 @@ jobs:
         shell: bash
         run: bun run pack
 
-      - name: Collect assets and checksums
+      - name: Collect assets, verify embedded CLI, checksums
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist/assets
+          built=$(sha256sum packages/cli/dist/cli-linux-x64-baseline/bin/opencode | cut -d' ' -f1)
+          embedded=$(sha256sum packages/desktop/resources/opencode-cli | cut -d' ' -f1)
+          if [ "$built" != "$embedded" ]; then
+            echo "::error::Desktop did not embed the locally compiled CLI (built=$built embedded=$embedded)"
+            exit 1
+          fi
+          echo "Desktop embeds the source-built CLI: $built"
           cp dist/desktop/*.deb dist/assets/
-          (cd dist/assets && sha256sum *.deb > SHA256SUMS-linux)
+          (cd dist/assets && sha256sum opencode-* > SHA256SUMS-linux)
           ls -lh dist/assets
 
       - name: Attach assets to release
@@ -128,7 +158,9 @@ jobs:
   windows-exe:
     needs: meta
     runs-on: windows-2022
-    timeout-minutes: 60
+    timeout-minutes: 120
+    env:
+      OPENCODE_VERSION: ${{ needs.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -136,20 +168,23 @@ jobs:
       - name: Set up Bun and install dependencies
         uses: ./.github/actions/setup-bun
 
-      - name: Stage bundled CLI (windows-x64)
+      - name: Build CLI from source (windows-x64-baseline)
+        working-directory: packages/cli
         env:
-          VERSION: ${{ needs.meta.outputs.version }}
+          OPENCODE_TARGET: windows-x64-baseline
+          NODE_OPTIONS: --max-old-space-size=4096
+        shell: bash
+        run: bun ./script/build.ts --skip-install
+
+      - name: Stage standalone CLI (windows)
         shell: bash
         run: |
           set -euo pipefail
-          tmp=$(mktemp -d)
-          bun install --no-save --cwd "$tmp" "@opencode/cli-windows-x64-baseline@$VERSION" --os=win32 --cpu=x64
-          pkg="$tmp/node_modules/@opencode/cli-windows-x64-baseline"
-          dest="packages/cli/dist/cli-windows-x64-baseline"
-          mkdir -p "$dest/bin"
-          cp "$pkg/bin/opencode.exe" "$dest/bin/opencode.exe"
-          cp "$pkg/package.json" "$dest/package.json"
-          ls -lh "$dest/bin/opencode.exe"
+          cli="packages/cli/dist/cli-windows-x64-baseline/bin/opencode.exe"
+          test -s "$cli" || { echo "::error::Compiled CLI missing: $cli"; exit 1; }
+          mkdir -p dist/assets
+          cp "$cli" dist/assets/opencode-cli-windows-x64.exe
+          ls -lh dist/assets
 
       - name: Build desktop app
         working-directory: packages/desktop
@@ -171,13 +206,20 @@ jobs:
           cp dist/*.exe ../../dist/assets/
           ls -lh ../../dist/assets
 
-      - name: Checksum and attach assets to release
+      - name: Verify embedded CLI, checksums and attach assets
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.meta.outputs.tag }}
         shell: bash
         run: |
           set -euo pipefail
+          built=$(sha256sum packages/cli/dist/cli-windows-x64-baseline/bin/opencode.exe | cut -d' ' -f1)
+          embedded=$(sha256sum packages/desktop/resources/opencode-cli.exe | cut -d' ' -f1)
+          if [ "$built" != "$embedded" ]; then
+            echo "::error::Desktop did not embed the locally compiled CLI (built=$built embedded=$embedded)"
+            exit 1
+          fi
+          echo "Desktop embeds the source-built CLI: $built"
           (cd dist/assets && sha256sum *.exe > SHA256SUMS-windows)
           # source-release creates the release and its changelog notes first;
           # wait for it instead of racing to create a bare release.
