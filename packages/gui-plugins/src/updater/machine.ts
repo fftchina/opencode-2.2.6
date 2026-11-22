@@ -204,17 +204,14 @@ export const make = Effect.fn("Updater.make")(function* (dependencies: Dependenc
 
   init.effects.forEach(perform)
   yield* Effect.addFinalizer(() => Effect.sync(() => dispatch({ type: "disposed" })))
-  const starting = yield* check.pipe(Effect.forkScoped)
-  yield* Effect.gen(function* () {
-    yield* Effect.sleep("10 minutes")
-    yield* check
-  }).pipe(Effect.forever, Effect.forkScoped)
 
   return {
     check,
     install,
     state: () => current.view,
-    started: Fiber.join(starting).pipe(Effect.orDie),
+    // Nothing checks on startup or on a timer anymore. `started` remains an explicit
+    // first-check handle for tests, but no production caller forks it.
+    started: check,
   }
 })
 

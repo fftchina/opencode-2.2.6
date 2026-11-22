@@ -1,9 +1,6 @@
 import { CHECK_TIMEOUT_MS, initialWebUpdate, transitionWebUpdate } from "./web-machine"
 import type { WebUpdateEffect, WebUpdateEvent, WebUpdateState, WebWorker } from "./web-machine"
 
-/** How often an open, visible window asks the server for a newer build. */
-const CHECK_INTERVAL_MS = 10 * 60_000
-
 /** The channel the app's windows share to reload together after a reset. */
 const RESET_CHANNEL = "opencode.updater.reset"
 
@@ -139,19 +136,7 @@ export function startWebUpdater(options: WebUpdaterOptions) {
       })
       track(registration.installing)
       dispatch({ type: "registered", worker: newest(registration) })
-      check(false)
     })
-
-    listen(document, "visibilitychange", () => {
-      if (document.visibilityState === "visible") check(false)
-    })
-    listen(window, "online", () => check(false))
-
-    const interval = setInterval(() => {
-      if (document.visibilityState === "visible") check(false)
-    }, CHECK_INTERVAL_MS)
-
-    cleanup.push(() => clearInterval(interval))
   }
 
   if (channel) {
